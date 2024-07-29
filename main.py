@@ -1,7 +1,4 @@
-"""
-In this version, we will keep it in lidar coordinate system, but convert to 03d just for visualization
-"""
-
+# In this version, we convert everything to open3d coordinate system
 import pandas as pd
 import open3d as o3d
 import numpy as np
@@ -70,11 +67,10 @@ def get_markers_from_tracking(file_name):
     human_description = human_description.mean()
 
     human_piv_rot = human_description[["X", "Y", "Z", "W"]].to_numpy()
-    # human_piv_rot[1] = -1 * human_piv_rot[0]
+
     human_piv_rot = R.from_quat(human_piv_rot).as_matrix()
 
     human_piv_loc = human_description[["X.1", "Y.1", "Z.1"]].to_numpy()
-    # human_piv_loc[0] = -1 * human_piv_loc[0]
 
 
     marker_count = int(list(human_description.keys())[-1].split(".")[-1])
@@ -82,7 +78,6 @@ def get_markers_from_tracking(file_name):
 
     for idx, marker_i in enumerate(range(2, marker_count + 1)):
         marker_i_loc = human_description[["X.%i" % marker_i, "Y.%i" % marker_i, "Z.%i" % marker_i]].to_numpy()
-        # marker_i_loc[0] = -1 * marker_i_loc[0]
         human_markers[idx, :3, 3] = marker_i_loc - human_piv_loc
 
     return human_markers, marker_count
@@ -96,7 +91,6 @@ def create_point_cloud(points, color):
 def dict2transMat(in_dict):
     position = np.array([in_dict['loc_x'], in_dict['loc_y'], in_dict['loc_z']], dtype=np.float64)
     orientation = np.array([in_dict['rot_x'], in_dict['rot_y'], in_dict['rot_z'], in_dict['rot_w']], dtype=np.float64) #scipy uses xyzw
-    # orientation[:3] = orientation[:3] / np.linalg.norm(orientation[:3]) #normalize the quaternion
 
     rotation = R.from_quat(orientation).as_matrix()
     transMat = np.identity(4, dtype=rotation.dtype)
@@ -258,7 +252,7 @@ geometries = []
 for idx, row in enumerate(data_out.to_dict(orient="records")):
     
     # pause at frame (comment out to run continuously)
-    if idx not in [50]: #use this to run only specific frames (comment out this line and next line to run all)
+    if idx not in [500]: #use this to run only specific frames (comment out this line and next line to run all)
         continue
     if idx != 0:
     # remove all the geometry objects from the previous frame
@@ -273,12 +267,14 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     
     human_rot = human_TMat[:3, :3]
     human_rot = np.array([convert_orientation(rot, 'NUE', 'RUB') for rot in human_rot])
-    
+
 
     #visualize in o3d 
     # lidar point cloud
     pcd = o3d.io.read_point_cloud(lidar_file)
     pcd.points = o3d.utility.Vector3dVector([convert_orientation(point, 'FLU', 'RUB') for point in np.asarray(pcd.points)])
+    #multiply the x and z by -1
+    pcd.points = o3d.utility.Vector3dVector([[-1 * point[0], point[1], -1 * point[2]] for point in np.asarray(pcd.points)])
     pcd.paint_uniform_color([0, 0, 1]) ## blue
     vis.add_geometry(pcd)
 
@@ -288,39 +284,49 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     
     # human markers (template)
     human_pc_red = create_point_cloud(human_markers_in_o3d, [1, 0, 0]) # point cloud of human template; color red
-    # vis.add_geometry(human_pc_red)
-
-  
+    
 
   
     # human markers (actual)
     human_markers_loc = human_markers_in_o3d + human_loc
+
     #multiply the x and z by -1
-    human_markers_loc[:, 0] = -1 * human_markers_loc[:, 0]
-    human_markers_loc[:, 2] = -1 * human_markers_loc[:, 2]
+    # human_markers_loc[:, 0] = -1 * human_markers_loc[:, 0]
+    # human_markers_loc[:, 2] = -1 * human_markers_loc[:, 2]
+
     #rotate point cloud by 180 degrees around the third point
     # human_markers_loc = np.matmul(human_markers_loc, rotation_matrix_from_vectors(np.array([0, 0, 1]), np.array([0, 0, -1])))
+    
     human_pc_green = create_point_cloud(human_markers_loc, [0, 1, 0]) # point cloud of human template; color green
     human_pc_green.rotate(human_rot, center=human_pc_green.points[3])
-    vis.add_geometry(human_pc_green)
+    
 
-    test_point = o3d.geometry.TriangleMesh.create_sphere(radius=0.03)
-    test_point.translate(human_pc_red.points[0])
+  
+    # human anchor point (yellow)
+    human_anchor = o3d.geometry.TriangleMesh.create_sphere(radius=0.03)
+    human_anchor.translate(human_loc)
+    human_anchor.paint_uniform_color([1, 1, 0]) ## yellow
+    vis.add_geometry(human_anchor)
 
-      #rotate human point cloud 
-    v1 = np.array([0, 0,1]) #Z AXIS
-    v2 = human_pc_red.points[0]
+    #human coordinate frame
+    human_relative_pose = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.3)
+    human_relative_pose.translate(human_loc)
+    human_relative_pose.rotate(human_rot, center=human_loc)
+    vis.add_geometry(human_relative_pose)
+
+    
+      #align human point cloud with axis
+    v1 = np.array([-1, 0,0]) # negative x axis
+    v2 = human_pc_red.points[0] # across human shoulders
     r = rotation_matrix_from_vectors(v2, v1)
     human_pc_red.rotate(r, center=human_pc_red.points[3])
     human_pc_green.rotate(r, center=human_pc_green.points[3])
-    
-    test_point2 = o3d.geometry.TriangleMesh.create_sphere(radius=0.03)
-    test_point2.translate([0,0,1])
-    vis.add_geometry(test_point2)
-    vis.add_geometry(test_point)
+    vis.add_geometry(human_pc_green)
+    vis.add_geometry(human_pc_red)
     # human bounding box
     human_bbox = draw_bounding_box(human_pc_green.points)
     # vis.add_geometry(human_bbox)
+    geometries.extend([pcd, human_pc_green, human_bbox, human_anchor])
 
     # read bounding box from file
     bb_data = (extract_bounding_box_info(human_bbox))
@@ -330,6 +336,23 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     bb2.color = (0, 1, 0)  # Green color
     print(bb2.get_center())
     vis.add_geometry(bb2)
+    
+
+    #crop for visualization purposes
+    position = human_loc
+    print(position)
+    pcd_points = np.asarray(pcd.points)
+    
+    size = 1.5 #2
+    pcd_points = pcd_points[np.where(pcd_points[:, 0] > position[0]-size)]
+    pcd_points = pcd_points[np.where(pcd_points[:, 0] < position[0]+size)]
+    pcd_points = pcd_points[np.where(pcd_points[:, 2] > position[1]-size)]
+    pcd_points = pcd_points[np.where(pcd_points[:, 2] < position[1]+size)]
+   
+    # pcd.points = o3d.utility.Vector3dVector(pcd_points) # uncomment this line to crop into subject
+  
+    pcd.paint_uniform_color([0, 0, 1]) ## blue 
+   
 
     vis.poll_events()
     vis.update_renderer()
