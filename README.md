@@ -1,5 +1,5 @@
 # dataset
-Objective: Aligmnent of LIDAR and Optitrack for SAPIENCE
+Objective: extract bounding box information for the mannequin through aligmnent of LIDAR and Optitrack 
 
 Quickstart:
   1. Add to directory the following:
