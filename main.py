@@ -182,7 +182,9 @@ def write_to_file(row, set_name, data) :
     label_name = row["point_cloud_fn"].replace('.pcd', '.txt')
     label_folder = os.path.join(set_name, 'labels')
     label_file = os.path.join(label_folder, label_name)
-  
+    if not os.path.exists(label_folder):
+        os.makedirs(label_folder)
+        
     with open(label_file, 'w') as file:
         file.write(line)
 
