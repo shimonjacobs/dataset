@@ -1,4 +1,7 @@
-# In this version, we convert everything to open3d coordinate system
+"""
+In this version, we will keep it in lidar coordinate system, but convert to 03d just for visualization
+"""
+
 import pandas as pd
 import open3d as o3d
 import numpy as np
@@ -162,14 +165,16 @@ def read_bounding_box_from_file(file_path):
         y = float(parts[12])
         z = float(parts[13])
         rotation_y = float(parts[14])
-
+        print(rotation_y)
         # Create the bounding box
         center = [x, y, z]
         extent = [width, height, length]
 
         # Create the rotation matrix from rotation_y
-        rotation = R.from_euler('y', rotation_y, degrees=False).as_matrix()
+        rotation = R.from_euler('Y', rotation_y, degrees=False).as_matrix()
         # rotation = np.eye(3)
+        # rotation = np.linalg.inv(rotation)  # Invert the rotation matrix
+        
 
         # Create and return the OrientedBoundingBox
         obb = o3d.geometry.OrientedBoundingBox(center, rotation, extent)
@@ -182,9 +187,9 @@ def write_to_file(row, set_name, data) :
     label_name = row["point_cloud_fn"].replace('.pcd', '.txt')
     label_folder = os.path.join(set_name, 'labels')
     label_file = os.path.join(label_folder, label_name)
+    
     if not os.path.exists(label_folder):
         os.makedirs(label_folder)
-        
     with open(label_file, 'w') as file:
         file.write(line)
 
@@ -196,7 +201,7 @@ def extract_bounding_box_info(bbox):
         # For AABB
         center = bbox.get_center()
         extent = bbox.extent
-        rotation_y = 0.0  # No rotation for AABB
+        rotation_y = 0.0  # No rotation needed for AABB
 
         height, width, length = extent
         x, y, z = center
@@ -210,7 +215,8 @@ def extract_bounding_box_info(bbox):
         rotation_matrix = bbox.R.copy()
         r = R.from_matrix(rotation_matrix)
         euler_angles = r.as_euler('xyz', degrees=False)
-        rotation_y = euler_angles[1]  # Yaw angle
+        print(euler_angles)
+        rotation_y = euler_angles[0]  # Yaw angle
         height, width, length = np.asarray(extent) 
         length = length * 2
         x, y, z = center
@@ -325,9 +331,10 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     human_pc_green.rotate(r, center=human_pc_green.points[3])
     vis.add_geometry(human_pc_green)
     vis.add_geometry(human_pc_red)
+    
     # human bounding box
     human_bbox = draw_bounding_box(human_pc_green.points)
-    # vis.add_geometry(human_bbox)
+    vis.add_geometry(human_bbox)
     geometries.extend([pcd, human_pc_green, human_bbox, human_anchor])
 
     # read bounding box from file
@@ -336,13 +343,14 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
 
     bb2 = read_bounding_box_from_file(os.path.join(set_name, 'labels', row["point_cloud_fn"].replace('.pcd', '.txt')))
     bb2.color = (0, 1, 0)  # Green color
-    print(bb2.get_center())
+    # print(bb2.get_center())
+    # bb2.rotate(human_rot, center=bb2.get_center())
     vis.add_geometry(bb2)
     
 
     #crop for visualization purposes
     position = human_loc
-    print(position)
+    # print(position)
     pcd_points = np.asarray(pcd.points)
     
     size = 1.5 #2
