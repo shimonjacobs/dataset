@@ -103,13 +103,14 @@ def dict2transMat(in_dict):
 
 def row2transMat(row):
     human_data = {key: row[value] for key, value in zip(["loc_x", "loc_y", "loc_z", "rot_w", "rot_x", "rot_y", "rot_z"], ["H_x", "H_y", "H_z", "H_qw", "H_qx", "H_qy", "H_qz"])}
-    # print(human_data)
     human_transformation = dict2transMat(human_data)
     
+    box_data = {key: row[value] for key, value in zip(["loc_x", "loc_y", "loc_z", "rot_w", "rot_x", "rot_y", "rot_z"], ["B_x", "B_y", "B_z", "B_qw", "B_qx", "B_qy", "B_qz"])}
+    box_transformation = dict2transMat(box_data)   
     lidar_data = {key: row[value] for key, value in zip(["loc_x", "loc_y", "loc_z", "rot_w", "rot_x", "rot_y", "rot_z"], ["S_x", "S_y", "S_z", "S_qw", "S_qx", "S_qy", "S_qz"])}
     lidar_transformation = dict2transMat(lidar_data)
     
-    return human_transformation, lidar_transformation
+    return human_transformation, lidar_transformation, box_transformation
 
 def transMat2Dict(transMat):
     rotMat = transMat[:3, :3]
@@ -143,7 +144,7 @@ def draw_bounding_box(points: np.ndarray) -> o3d.geometry.OrientedBoundingBox:
     point_cloud = o3d.geometry.PointCloud()
     point_cloud.points = o3d.utility.Vector3dVector(points)
     obb = point_cloud.get_oriented_bounding_box()
-    aabb = pcd.get_axis_aligned_bounding_box()
+    # aabb = pcd.get_axis_aligned_bounding_box()
     obb.color = (1, 0, 0)  # Red color
     
     return obb
@@ -180,10 +181,12 @@ def read_bounding_box_from_file(file_path):
         obb = o3d.geometry.OrientedBoundingBox(center, rotation, extent)
         return obb
     
-def write_to_file(row, set_name, data) :
+def write_to_file(row, set_name, data, data_box):
     h, w, l, x, y, z, r = data
+    h2, w2, l2, x2, y2, z2, r2 = data_box
     # x += 0.1 # Decrease length by 10 cm for better results
-    line = f"human 0 0 0 0 0 0 0 {h} {l} {w} {x} {y} {z} {r}"
+    line = f"human 0 0 0 0 0 0 0 {h} {l} {w} {x} {y} {z} {r} \n"
+    line2 = f"box 0 0 0 0 0 0 0 {h2} {l2} {w2} {x2} {y2} {z2} {r2} \n"
     label_name = row["point_cloud_fn"].replace('.pcd', '.txt')
     label_folder = os.path.join(set_name, 'labels')
     label_file = os.path.join(label_folder, label_name)
@@ -192,6 +195,8 @@ def write_to_file(row, set_name, data) :
         os.makedirs(label_folder)
     with open(label_file, 'w') as file:
         file.write(line)
+        file.write(line2)
+
 
 def extract_bounding_box_info(bbox):
     """
@@ -226,13 +231,36 @@ def extract_bounding_box_info(bbox):
 
     return height, width, length, x, y, z, rotation_y
 
+def get_box_descriptions(file_name):
+    # Load the data, skipping initial metadata rows if necessary
+    box_description = pd.read_csv(file_name, skiprows=list(range(6))).dropna()
+    box_description = box_description[box_description.columns[list(range(30))]] #drop frame and time
+    headers = box_description.columns
+    box_description = box_description.mean() 
+
+    # Extract the rotation and location of the box rigid body
+    box_piv_rot = box_description[["X", "Y", "Z", "W"]].to_numpy() #body anchor is the first point
+    box_piv_rot = R.from_quat(box_piv_rot).as_matrix()
+    box_piv_loc = box_description[["X.1", "Y.1", "Z.1"]].to_numpy()
+    marker_count = 7
+    box_markers = box_description[headers[list(range(9,30))]]
+
+    box_markers = box_markers.to_numpy().reshape((7, 3))
+    box_markers -= box_piv_loc # zero relative to the body anchor
+
+
+    return box_markers #, marker_count, box_piv_rot, box_piv_loc
+
+
 # load in the human markers
 human_markers, marker_count = get_markers_from_tracking("human_description.csv")
 
 human_markers_in_o3d = np.array([convert_orientation(marker, 'NUE', 'RUB') for marker in human_markers[:, :3, 3]])
 
+box_markers = get_box_descriptions("box_markers.csv")
+print(box_markers)
 #load in the lidar data
-set_name = "take_2"
+set_name = "take_4"
 lidar_folder = os.path.join(set_name, 'point_clouds')
 csv_file = f"{set_name}_filtered.csv"
 data = pd.read_csv(csv_file).dropna()
@@ -244,9 +272,17 @@ vis.create_window()
 
 # data_out contains the relative positions of the human markers with respect to the lidar
 for row in data.to_dict(orient="records"):
-    human_transformation, lidar_transformation = row2transMat(row)
+    human_transformation, lidar_transformation, box_transformation =  row2transMat(row)
     human_rel_posMat = np.matmul(np.linalg.inv(lidar_transformation), human_transformation)
+    box_rel_posMat = np.matmul(np.linalg.inv(lidar_transformation), box_transformation)
     
+    relDict_box = transMat2Dict(box_rel_posMat)
+    relDict_box["timestamp"] = row['Time Elapsed']
+    relDict_box["img_fn"] = row['Closest Image']
+    relDict_box["point_cloud_fn"] = row['Closest Image'].replace('.png', '.pcd')
+    rel_df_box = pd.DataFrame([relDict_box])
+    data_out_box = pd.concat([data_out, rel_df_box], ignore_index=True)
+
     relDict = transMat2Dict(human_rel_posMat)
     relDict["timestamp"] = row['Time Elapsed']
     relDict["img_fn"] = row['Closest Image']
@@ -276,7 +312,20 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     human_rot = human_TMat[:3, :3]
     human_rot = np.array([convert_orientation(rot, 'NUE', 'RUB') for rot in human_rot])
 
+    box_TMat = dict2transMat(row) #in optitrack frame (NUE)
+    
+    # box point cloud 
+    box_pc = create_point_cloud(box_markers, [1, 0, 0]) # point cloud of box markers; color red
+    box_rot = box_TMat[:3, :3]
+    box_rot = np.array([convert_orientation(rot, 'NUE', 'RUB') for rot in box_rot])
+    box_loc = convert_orientation(box_TMat[:3, 3], 'NUE', 'RUB')
+   
+    box_pc.translate(box_loc)
+    box_pc.rotate(box_rot, center=box_pc.points[3])
 
+    vis.add_geometry(box_pc)
+    box_bb = draw_bounding_box(box_pc.points)
+    vis.add_geometry(box_bb)
     #visualize in o3d 
     # lidar point cloud
     pcd = o3d.io.read_point_cloud(lidar_file)
@@ -330,16 +379,17 @@ for idx, row in enumerate(data_out.to_dict(orient="records")):
     human_pc_red.rotate(r, center=human_pc_red.points[3])
     human_pc_green.rotate(r, center=human_pc_green.points[3])
     vis.add_geometry(human_pc_green)
-    vis.add_geometry(human_pc_red)
+    # vis.add_geometry(human_pc_red)
     
     # human bounding box
     human_bbox = draw_bounding_box(human_pc_green.points)
-    vis.add_geometry(human_bbox)
+    # vis.add_geometry(human_bbox)
     geometries.extend([pcd, human_pc_green, human_bbox, human_anchor])
 
     # read bounding box from file
     bb_data = (extract_bounding_box_info(human_bbox))
-    write_to_file(row, set_name, bb_data)
+    box_bb_data = (extract_bounding_box_info(box_bb))
+    write_to_file(row, set_name, bb_data, box_bb_data)
 
     bb2 = read_bounding_box_from_file(os.path.join(set_name, 'labels', row["point_cloud_fn"].replace('.pcd', '.txt')))
     bb2.color = (0, 1, 0)  # Green color
