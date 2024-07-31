@@ -256,17 +256,50 @@ def extract_bounding_box_info(bbox):
 
     return height, width, length, x, y, z, rotation_y
 
-def box_wld_from_points(points : np.ndarray):
+
+"""
+    Caluclates dimensions of a box 
+"""
+def box_wld_from_points(points : np.ndarray, scale : float = 1):
     w_max, l_max, d_max = points.max(axis=0)
     w_min, l_min, d_min = points.min(axis=0)
 
-    bb_width = w_max - w_min
-    bb_length = l_max - l_min
-    bb_depth = d_max - d_min
+    bb_width = (w_max - w_min) * scale
+    bb_length = (l_max - l_min) * scale
+    bb_depth = (d_max - d_min) * scale
 
-    return bb_width, bb_length, bb_depth
+    return bb_width, bb_depth, bb_length
 
+def draw_centre(vis, geometries):
+    #origin - relative to lidar
+    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.7, origin=[0, 0, 0])
+    origin.rotate(r_o2l, center = (0,0,0))
+    geometries.append(origin)
+    vis.add_geometry(origin)
 
+    ## paint 3 points just to see relative to open3d
+    ## point on x axes 
+    x_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
+    x_sphere.translate([1,0,0])
+    x_sphere.paint_uniform_color([1, 0, 0]) ## red
+    geometries.append(x_sphere)
+    vis.add_geometry(x_sphere)
+
+    ## point on y axes 
+    y_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
+    y_sphere.translate([0,1,0])
+    y_sphere.paint_uniform_color([0, 1, 0]) ## green
+    geometries.append(y_sphere)
+    vis.add_geometry(y_sphere)
+
+    ## point on z axis 
+    z_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
+    z_sphere.translate([0,0,1])
+    z_sphere.paint_uniform_color([0, 0, 1]) ## blue
+    geometries.append(z_sphere)
+    vis.add_geometry(z_sphere)
+
+    return geometries
 
 # load in the human markers
 human_markers, marker_count, human_pivot_rot = get_markers_from_tracking(Path(os.path.realpath(__file__)).parent / "human_description.csv")
@@ -276,48 +309,43 @@ human_markers, marker_count, human_pivot_rot = get_markers_from_tracking(Path(os
 box_markers, box_marker_count, box_pivot_rot = get_markers_from_tracking(Path(os.path.realpath(__file__)).parent / "box_description.csv", usefloor=True)
 
 
-#load in the lidar data
+#load in the lidar data and define output path 
 base_path = Path("/media/maxwell/DUMPSTERFIR1/sapience")
 set_name = "take_3"
 lidar_folder = base_path / os.path.join(set_name, 'point_clouds')
 csv_file = base_path / f"optitrack_processedData/{set_name}_filtered.csv"
 data = pd.read_csv(csv_file, float_precision='round_trip').dropna()
 
-print(list(data.columns))
-print(data.head())
 
-fig, axs = plt.subplots(3,2)
+output_path = Path(os.getcwd()) / "output_files"
+if not output_path.exists():
+    os.mkdir(output_path)
 
-# data_human = data_rel.loc[data_rel['class'] == 0]
-data.plot(y="H_x", ax=axs[0,0])
-data.plot(y="H_y", ax=axs[1,0])
-data.plot(y="H_z", ax=axs[2,0])
+# print(list(data.columns))
+# print(data.head())
 
-data.plot(y="H_x", ax=axs[0,0])
-data.plot(y="H_y", ax=axs[1,0])
-data.plot(y="H_z", ax=axs[2,0])
-
-plt.show()
-
-# for col_name in ["H_qx","H_qy","H_qz","H_qw","H_x","H_y","H_z","B_qx","B_qy","B_qz","B_qw","B_x","B_y","B_z"]:
-#     if col_name in data:
-#         data[col_name].values[:] = data[col_name].mean() 
-
-# fig, axs = plt.subplots(3,1)
+# fig, axs = plt.subplots(3,2)
 
 # # data_human = data_rel.loc[data_rel['class'] == 0]
-# data.plot(y="H_x", ax=axs[0])
-# data.plot(y="H_y", ax=axs[1])
-# data.plot(y="H_z", ax=axs[2])
+# data.plot(y="H_x", ax=axs[0,0])
+# data.plot(y="H_y", ax=axs[1,0])
+# data.plot(y="H_z", ax=axs[2,0])
+
+# data.plot(y="H_x", ax=axs[0,0])
+# data.plot(y="H_y", ax=axs[1,0])
+# data.plot(y="H_z", ax=axs[2,0])
 
 # plt.show()
 
+
 data_rel = pd.DataFrame(columns=["timestamp", "point_cloud_fn", "img_fn", "loc_x", "loc_y", "loc_z", "rot_x", "rot_y", "rot_z", "rot_w", "class"])
 
+
+## below is the translation matrix from the tracked pivot point of the lidar to the centre of the sensor which is its frame of reference 
 ##  (33.375, 52.84, 135.875) 
 lidar_opti_pv_2_centre = np.array(
     [
-        [1, 0, 0, -33.375e-3],
+        [1, 0, 0,  -33.375e-3],
         [0, 1, 0,  52.840e-3],
         [0, 0, 1, 135.875e-3],
         [0, 0, 0,  1]
@@ -383,8 +411,8 @@ for idx, pc_filename in enumerate(pc_filenames):
         continue
     
     # pause at frame (comment out to run continuously)
-    if idx <= 50: #use this to run only specific frames (comment out this line and next line to run all)
-        continue
+    # if idx <= 10: #use this to run only specific frames (comment out this line and next line to run all)
+    #     continue
     if idx != 0:
     # remove all the geometry objects from the previous frame
         for item in geometries:
@@ -397,37 +425,14 @@ for idx, pc_filename in enumerate(pc_filenames):
     geometries.append(pcd)
     vis.add_geometry(pcd)
 
-    #origin - relative to lidar
-    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.7, origin=[0, 0, 0])
-    origin.rotate(r_o2l, center = (0,0,0))
-    geometries.append(origin)
-    vis.add_geometry(origin)
-
-    ## paint 3 points just to see relative to open3d
-    ## point on x axes 
-    x_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
-    x_sphere.translate([1,0,0])
-    x_sphere.paint_uniform_color([1, 0, 0]) ## red
-    geometries.append(x_sphere)
-    vis.add_geometry(x_sphere)
-
-    ## point on y axes 
-    y_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
-    y_sphere.translate([0,1,0])
-    y_sphere.paint_uniform_color([0, 1, 0]) ## green
-    geometries.append(y_sphere)
-    vis.add_geometry(y_sphere)
-
-    ## point on z axis 
-    z_sphere = o3d.geometry.TriangleMesh.create_sphere(.1)
-    z_sphere.translate([0,0,1])
-    z_sphere.paint_uniform_color([0, 0, 1]) ## blue
-    geometries.append(z_sphere)
-    vis.add_geometry(z_sphere)
-    
+    geometries = draw_centre(vis, geometries)    
 
     ## get the rows associated with this file:
     pc_rows = data_rel.loc[data_rel['point_cloud_fn'] == pc_filename]
+    
+    ## lazy write
+    output_filepath = output_path / (set_name + pc_filename.replace('pcd', "txt"))
+    f = open(output_filepath, "w")
 
     for _, row in pc_rows.iterrows():
         # print(row)
@@ -456,10 +461,10 @@ for idx, pc_filename in enumerate(pc_filenames):
             ### grab the points of the box in this perspective - can be used to get the whd 
             object_pc_bounds = object_pc.get_axis_aligned_bounding_box().get_box_points()
 
-            ### append these points to the pc for generating oriented box 
+            ### append these points to the pc for better oriented bbox estimation  
             object_pc.points.extend(object_pc_bounds)
 
-            bb_width, bb_length, bb_depth = box_wld_from_points(np.asarray(object_pc_bounds))
+            bb_width, bb_length, bb_depth = box_wld_from_points(np.asarray(object_pc_bounds), scale=1.25)
             
             object_pc.rotate(object_rot, center=(0,0,0))
             object_pc.translate(object_loc)
@@ -475,10 +480,10 @@ for idx, pc_filename in enumerate(pc_filenames):
             ### grab the points of the box in this perspective - can be used to get the wld
             object_pc_bounds = object_pc.get_axis_aligned_bounding_box().get_box_points()
             
-            ### append these points to the pc for 
+            ### append these points to the pc for better oriented bbox estimation 
             object_pc.points.extend(object_pc_bounds)
 
-            bb_width, bb_length, bb_depth = box_wld_from_points(np.asarray(object_pc_bounds))
+            bb_width, bb_length, bb_depth = box_wld_from_points(np.asarray(object_pc_bounds), scale=1.25)
 
             object_pc.rotate(object_rot, center=(0,0,0))
             object_pc.translate(object_loc)
@@ -488,7 +493,7 @@ for idx, pc_filename in enumerate(pc_filenames):
 
         else:
             print("Warning class not recognised")
-        # print("after", idx, cls, object_loc, object_rot)
+
 
         object_bb = object_pc.get_minimal_oriented_bounding_box(robust=True) 
         object_bb.color = [135/255,31/255,120/255]
@@ -500,17 +505,25 @@ for idx, pc_filename in enumerate(pc_filenames):
         ## type, truncated, occluded, alpha, 2d_xyxy_bbox, 3d_dims, 3d_loc, 3d_yaw, score
         bb_description = [0,0,0,0,0,0,0] + [bb_width, bb_length, bb_depth] + bb_xyz + [bb_yaw]
 
-        print(cls_name, bb_description)
+        object_bb_out = o3d.geometry.TriangleMesh.create_box(bb_width, bb_length, bb_depth).get_minimal_oriented_bounding_box()
+        object_bb_out.color = [1, 0.647, 0]
+        object_bb_out.translate([-bb_width/2, -bb_length/2, -bb_depth/2]) ## centre on (0,0,0)
+        object_bb_out.translate(bb_xyz) ## move to the loaction 
+        object_bb_out.rotate(R.from_euler("xyz", [0, 0, bb_yaw]).as_matrix())
+        vis.add_geometry(object_bb_out)
+        geometries.append(object_bb_out)
+
+        f.write(cls_name + str(bb_description).replace("[", ",").replace("]", "\n"))
 
 
-   
+    f.close()
     vis.poll_events()
     vis.update_renderer()
 
     time.sleep(.05)
-
-    if idx >= 600:
-        break 
+    # break
+    # if idx >= 60:
+    #     break 
 
 vis.run()
 vis.destroy_window()
