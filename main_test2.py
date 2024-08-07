@@ -17,9 +17,6 @@ from objectron import box as Box
 
 from IoU3d import box3d_iou
 
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning) 
-
 WRITE_FILE = False
 
 def convert_orientation(vector, source, target):
@@ -232,8 +229,6 @@ def write_to_file(row, set_name, data, data_box):
     with open(label_file, 'w') as file:
         file.write(line)
         file.write(line2)
-    ## Daniel's Writing to debug
-    print(f"Written to file: {label_file}")
 
 
 def extract_bounding_box_info(bbox):
@@ -356,43 +351,20 @@ human_markers, marker_count, human_pivot_rot = get_markers_from_tracking(Path(os
 box_markers, box_marker_count, box_pivot_rot = get_markers_from_tracking(Path(os.path.realpath(__file__)).parent / "box_description.csv", usefloor=True)
 
 
-## Daniel's Task 2 Functions
-def convert_pcd_to_bin(pcd):
-    points = np.asarray(pcd.points)
-    bin_points = points.astype(np.float32).tobytes()
-    return bin_points
-
-## Daniel's Task 2 Functions
-def save_bin_file(bin_data, filepath):
-    with open(filepath, 'wb') as f:
-        f.write(bin_data)
-
-
 #load in the lidar data and define output path 
 base_path = Path("/media/maxwell/DUMPSTERFIR1/sapience")
-set_name = "take_3"
+set_name = "take_2"
 lidar_folder = base_path / os.path.join(set_name, 'point_clouds')
 csv_file = base_path / f"optitrack_processedData/{set_name}_filtered.csv"
 data = pd.read_csv(csv_file, float_precision='round_trip').dropna()
 
-### Daniel Task 1: modify this to create the correct filestructure 
-# output_path = Path(os.getcwd()) / "output_files"
-# if not output_path.exists():
-#     os.mkdir(output_path)
 
-## Step 1: Going to initialize the output path to "training" 
-output_path = Path(os.getcwd()) / "training"
-label_path = output_path / "label_2"
-velodyne_path = output_path / "velodyne"
+output_path = Path(os.getcwd()) / "output_files"
 if not output_path.exists():
     os.mkdir(output_path)
-if not label_path.exists():
-    os.mkdir(label_path)
-if not velodyne_path.exists():
-    os.mkdir(velodyne_path)
 
 
-data_rel = pd.DataFrame(columns=["timestamp", "point_cloud_fn", "img_fn", "loc_x", "loc_y", "loc_z", "rot_x", "rot_y", "rot_z", "rot_w", "class", "yaw"])
+data_rel = pd.DataFrame(columns=["timestamp", "point_cloud_fn", "img_fn", "loc_x", "loc_y", "loc_z", "rot_x", "rot_y", "rot_z", "rot_w", "class"])
 
 
 ## below is the translation matrix from the tracked pivot point of the lidar to the centre of the sensor which is its frame of reference 
@@ -441,7 +413,7 @@ for row in data.to_dict(orient="records"):
 geometries = []
 # main loop
 pc_filenames = data_rel["point_cloud_fn"].unique()
-print("Number of pcd files: {len(pc_filenames)}")
+print(len(pc_filenames))
 
 ## optitrack to lidar rotation: 
 r_o2l = np.array(
@@ -466,7 +438,7 @@ for idx, pc_filename in enumerate(pc_filenames):
         continue
     
     # pause at frame (comment out to run continuously) 680
-    if idx <= 150: #use this to run only specific frames (comment out this line and next line to run all)
+    if idx <= 100: #use this to run only specific frames (comment out this line and next line to run all)
         continue
     if idx != 0:
     # remove all the geometry objects from the previous frame
@@ -487,7 +459,7 @@ for idx, pc_filename in enumerate(pc_filenames):
     
     ## lazy write
     if WRITE_FILE:
-        output_filepath = label_path / (pc_filename.replace('.pcd', "{}.txt".format(set_name)))
+        output_filepath = output_path / (set_name + "_" + pc_filename.replace('pcd', "txt"))
         f = open(output_filepath, "w")
 
     for _, row in pc_rows.iterrows():
@@ -546,68 +518,57 @@ for idx, pc_filename in enumerate(pc_filenames):
         vis.add_geometry(object_bb_6D)
         geometries.append(object_bb_6D)
         
-        ## using 6D pose box fine its centre - this will determine it's location, remember is it in open3d coords
+        ## using 6D pose box fine its centre - this will determine it's location 
         bb_xyz = object_bb_6D.get_center().tolist()
         
         ## the boxes dims are calculate above 
-        # bb_width(x), bb_height(y), bb_depth (z)
         bb_width, bb_height, bb_depth = dims_dict["W"], dims_dict["H"], dims_dict["D"]
-        print(cls_name, bb_width, bb_height, bb_depth)
-
-        ## create linset that is draw from bottom left corner to top right corner - in remember is it in open3d coords
-        points = [
-            [-bb_width/2, -bb_height/2, -bb_depth/2],
-            [ bb_width/2,  bb_height/2,  bb_depth/2],
-        ]
-        lines = [
-            [0, 1]
-        ]
-        line_set = o3d.geometry.LineSet(
-            points=o3d.utility.Vector3dVector(points),
-            lines=o3d.utility.Vector2iVector(lines),
-        )
-        line_set.rotate(object_rot, center=(0,0,0))
-        line_set.rotate(r_o2l, center = (0,0,0))
-        line_set.translate(bb_xyz)
-
-        vis.add_geometry(line_set)
-        geometries.append(line_set)
-
-        ## extract rotated corners - xyz in open3d coords 
-        corners = np.asarray(line_set.points)
-
-        object_yaw = np.arctan2((corners[0,1]-corners[1,1]),(corners[0,0]-corners[1,0]))
-
-        print(object_yaw, np.rad2deg(object_yaw))
+        # print(bb_width, bb_height, bb_depth)
+        
+        ## calculate yaw angle of box rotation rel to z of optitrack frame using https://stackoverflow.com/questions/2827393/angles-between-two-n-dimensional-vectors-in-python
+        object_rot_z = object_rot[2, :].squeeze() 
+        object_rot_z = object_rot_z/np.linalg.norm(object_rot_z)
+        z_axis = np.array([0,0,1])
+        object_yaw = np.arccos(np.clip(np.dot(z_axis,object_rot_z), -1.0, 1.0))
+        print(cls_no, cls_name, np.rad2deg(object_yaw), R.from_matrix(object_rot).as_euler("xyz"))
+        if R.from_matrix(object_rot).as_euler("xyz")[1] > 0:
+            object_yaw_R = np.linalg.inv(R.from_euler("xyz", [0,object_yaw,0]).as_matrix())
+            object_yaw_R_o3d = np.linalg.inv(R.from_euler("xyz", [0,0,-object_yaw]).as_matrix())
+        else:
+            object_yaw_R = R.from_euler("xyz", [0,object_yaw,0]).as_matrix()
+            object_yaw_R_o3d = R.from_euler("xyz", [0,0,-object_yaw]).as_matrix()
 
         ## calculate rotation without yaw - remember this shit is in the optitrack frame so y is up 
-        object_rot_noyaw = np.matmul(np.copy(object_rot),R.from_euler("xyz", [0,object_yaw,0]).as_matrix())
+        object_rot_noyaw = np.matmul(np.copy(object_rot),object_yaw_R)
 
         ## create a new box that is orientated with z forward, y up (rhr)
         object_bb_z_align = o3d.geometry.TriangleMesh.create_box(bb_width, bb_height, bb_depth).get_minimal_oriented_bounding_box()
         object_bb_z_align.color = [1, 0.647, 0]
         object_bb_z_align.translate([-bb_width/2, -bb_height/2, -bb_depth/2]) ## centre on (0,0,0)
-        object_bb_z_align.rotate(object_rot, center = (0,0,0))
+        object_bb_z_align.rotate(object_rot_noyaw, center = (0,0,0))
         object_bb_z_align.rotate(r_o2l, center = (0,0,0))
 
-        ## transformations in open3d
-        object_bb_z_align.translate(bb_xyz)
-        object_bb_z_align.rotate(R.from_euler("xyz", [0,0, object_yaw]).as_matrix(), center = bb_xyz)
-
-        # # object_bb_z_align.translate(bb_xyz) ## move to the loaction 
-        # # visualise object_bb_z_align
+        object_bb_z_align.translate(bb_xyz) ## move to the loaction 
+        # visualise object_bb_z_align
         vis.add_geometry(object_bb_z_align)
         geometries.append(object_bb_z_align)
 
-        # ## this is to check if the bounding box used to calculate the final dims is aligned with z
-        align_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.3 if cls_no==1 else 0.5, origin=(0,0,0))
+        ## this is to check if the bounding box used to calculate the final dims is aligned with z
+        align_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.4 if cls_no==1 else 0.6, origin=(0,0,0))
         align_origin.rotate(object_rot_noyaw, center=(0,0,0))
-        # align_origin.translate(object_loc)
         align_origin.rotate(r_o2l, center = (0,0,0))
+        # align_origin.translate(bb_xyz)
         vis.add_geometry(align_origin)
         geometries.append(align_origin)
 
-        # ## calculate a box that will enclose object_bb_z_align but is horizontally aligned
+        unalign_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.3 if cls_no==1 else 0.5, origin=(0,0,0))
+        unalign_origin.rotate(object_rot, center=(0,0,0))
+        unalign_origin.rotate(r_o2l, center = (0,0,0))
+        # align_origin.translate(bb_xyz)
+        vis.add_geometry(unalign_origin)
+        geometries.append(unalign_origin)
+
+        ## calculate a box that will enclose object_bb_z_align but is horizontally aligned
         object_pc_bounds = object_bb_z_align.get_axis_aligned_bounding_box().get_box_points()
         if cls_no == 1:
             dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1)
@@ -615,36 +576,31 @@ for idx, pc_filename in enumerate(pc_filenames):
             dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1, ordering="DWH")
         bb_width, bb_height, bb_depth = dims_dict["W"], dims_dict["H"], dims_dict["D"]
         
-        # ## create repesentation of the final box for visualisation - NOTE THAT AT THIS POINT WE ARE USING OPEN3D CONVENTION 
+        ## create repesentation of the final box for visualisation - NOTE THAT AT THIS POINT WE ARE USING OPEN3D CONVENTION 
         object_bb_out = o3d.geometry.TriangleMesh.create_box(bb_width, bb_height, bb_depth).get_minimal_oriented_bounding_box()
         object_bb_out.color = [0, 1, 0]
         object_bb_out.translate([-bb_width/2, -bb_height/2, -bb_depth/2]) ## centre on (0,0,0)
-        # object_bb_out.rotate(r_o2l, center = (0,0,0))
-        object_bb_out.rotate(R.from_euler("xyz", [0,0,-object_yaw]).as_matrix(), center = (0,0,0))
+        object_bb_out.rotate(object_yaw_R_o3d, center = (0,0,0))
+        # object_bb_out.rotate(r_o2l, center = (0,0,0)) ## generated in openc
         object_bb_out.translate(bb_xyz)
         vis.add_geometry(object_bb_out)
         geometries.append(object_bb_out)
 
-        # ## type, truncated, occluded, alpha, 2d_xyxy_bbox, 3d_dims, 3d_loc, 3d_yaw, score
+        ## type, truncated, occluded, alpha, 2d_xyxy_bbox, 3d_dims, 3d_loc, 3d_yaw, score
         bb_description = [0,0,0,0,0,0,0] + [bb_width, bb_height, bb_depth] + bb_xyz + [object_yaw]
 
         if WRITE_FILE:
             f.write(cls_name + str(bb_description).replace("[", ",").replace("]", "\n"))
-      
     
-    if WRITE_FILE:
-        f.close()
-        ## Daniel Task 2: code to convert pcd to binary then save in correct directory 
-        bin_data = convert_pcd_to_bin(pcd)
-        bin_file_path = velodyne_path / pc_filename.replace('.pcd', "{}.bin".format(set_name))
-        save_bin_file(bin_data, bin_file_path)
-
+    break    
+    
+    if WRITE_FILE: f.close()
     vis.poll_events()
     vis.update_renderer()
 
     time.sleep(.05)
-    break
-    # if idx >= 200:
+    # break
+    # if idx >= 60:
     #     break 
 
 vis.run()

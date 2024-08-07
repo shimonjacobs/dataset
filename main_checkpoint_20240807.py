@@ -20,7 +20,7 @@ from IoU3d import box3d_iou
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-WRITE_FILE = False
+WRITE_FILE = True
 
 def convert_orientation(vector, source, target):
     """
@@ -575,10 +575,32 @@ for idx, pc_filename in enumerate(pc_filenames):
 
         ## extract rotated corners - xyz in open3d coords 
         corners = np.asarray(line_set.points)
+        print(bb_xyz)
 
-        object_yaw = np.arctan2((corners[0,1]-corners[1,1]),(corners[0,0]-corners[1,0]))
+
+        ## define new point set 
+        # print(bb_width, bb_height, bb_depth)
+        
+        # ## calculate yaw angle of box rotation rel to z of optitrack frame using https://stackoverflow.com/questions/2827393/angles-between-two-n-dimensional-vectors-in-python
+        # object_rot_z = np.expand_dims(object_rot[2, :],axis = -1)
+        # print(object_rot_z)
+        # int(np.sign(object_rot_z)[-1])
+
+        # ## caluclate the projection of z onto the xz plane
+        # P_z = np.matrix([[0, 0, 0], [0, 0, 0], [0, 0, 1]])
+        # object_rot_z = (P_z*object_rot_z)
+        # object_rot_z.flat
+
+        # ## the yaw angle is the angle between z axis and our projection!!
+        # z_axis = np.array([0,0,1])
+
+        # ## may need to figure out if this is neg or pos 
+        # object_yaw = -2*np.pi + np.arccos(np.clip(np.dot(z_axis,object_rot_z), -1.0, 1.0))
+
+        object_yaw = np.arctan((corners[0,0]-corners[1,0])/(corners[0,1]-corners[1,1]))
 
         print(object_yaw, np.rad2deg(object_yaw))
+        # print(cls_no, cls_name, np.rad2deg(object_yaw), R.from_matrix(object_rot).as_euler("xyz"))
 
         ## calculate rotation without yaw - remember this shit is in the optitrack frame so y is up 
         object_rot_noyaw = np.matmul(np.copy(object_rot),R.from_euler("xyz", [0,object_yaw,0]).as_matrix())
@@ -643,7 +665,7 @@ for idx, pc_filename in enumerate(pc_filenames):
     vis.update_renderer()
 
     time.sleep(.05)
-    break
+    # break
     # if idx >= 200:
     #     break 
 
