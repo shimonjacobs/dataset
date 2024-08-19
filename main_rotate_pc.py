@@ -20,7 +20,7 @@ from IoU3d import box3d_iou
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning) 
 
-WRITE_FILE = True
+WRITE_FILE = False
 
 def convert_orientation(vector, source, target):
     """
@@ -317,10 +317,10 @@ def reorientation_matrix(open3dBox, ordering = "HWD"):
 
     return np.linalg.inv(np.asarray(open3dBox.R)), open3dBox_local
 
-def draw_centre(vis, geometries):
+def draw_centre(vis, geometries, rot = None):
     #origin - relative to lidar
     origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=.7, origin=[0, 0, 0])
-    origin.rotate(r_o2l, center = (0,0,0))
+    origin.rotate(rot, center = (0,0,0))
     geometries.append(origin)
     vis.add_geometry(origin)
 
@@ -351,6 +351,7 @@ def draw_centre(vis, geometries):
 # load in the human markers
 human_markers, marker_count, human_pivot_rot = get_markers_from_tracking(Path(os.path.realpath(__file__)).parent / "human_description.csv")
 
+
 # box_markers = get_box_descriptions("box_description.csv")
 box_markers, box_marker_count, box_pivot_rot = get_markers_from_tracking(Path(os.path.realpath(__file__)).parent / "box_description.csv", usefloor=True)
 
@@ -367,37 +368,33 @@ def save_bin_file(bin_data, filepath):
         f.write(bin_data)
 
 
-#### define output direcotries - following custom data tutorial found here:
-## https://github.com/open-mmlab/OpenPCDet/blob/master/docs/CUSTOM_DATASET_TUTORIAL.md
-if WRITE_FILE:
-    output_path = Path("detector_training/OpenPCDet/data/custom")
-    label_path = output_path / "labels"
-    velodyne_path = output_path / "points"
-    imageSets_path = output_path / "ImageSets"
-    if not output_path.exists():
-        output_path.mkdir(parents=True)
-    if not label_path.exists():
-        os.mkdir(label_path)
-    if not velodyne_path.exists():
-        os.mkdir(velodyne_path)
-    if not imageSets_path.exists():
-        # imageSets_path.rmdir()
-        os.mkdir(imageSets_path)
-
-
 #load in the lidar data and define output path 
 base_path = Path("/media/maxwell/DUMPSTERFIR1/sapience")
-set_name = "take_6"
+set_name = "take_1"
 lidar_folder = base_path / os.path.join(set_name, 'point_clouds')
 csv_file = base_path / f"optitrack_processedData/{set_name}_filtered.csv"
 data = pd.read_csv(csv_file, float_precision='round_trip').dropna()
 
-## define which image set we are adding these to 
-imageSet = "train" ## val train
+### Daniel Task 1: modify this to create the correct filestructure 
+# output_path = Path(os.getcwd()) / "output_files"
+# if not output_path.exists():
+#     os.mkdir(output_path)
 
-print("Working on", set_name, "which will go into", imageSet)
+## Step 1: Going to initialize the output path to "training" 
+# output_path = Path(os.getcwd()) / "training"
+output_path = Path("/media/maxwell/DUMPSTERFIR1/sapience/generated_data/train")
+label_path = output_path / "label_2"
+velodyne_path = output_path / "velodyne"
+if not output_path.exists():
+    output_path.mkdir(parents=True)
+if not label_path.exists():
+    os.mkdir(label_path)
+if not velodyne_path.exists():
+    os.mkdir(velodyne_path)
+
 
 data_rel = pd.DataFrame(columns=["timestamp", "point_cloud_fn", "img_fn", "loc_x", "loc_y", "loc_z", "rot_x", "rot_y", "rot_z", "rot_w", "class", "yaw", "L_Rot_Mat"])
+
 
 ## below is the translation matrix from the tracked pivot point of the lidar to the centre of the sensor which is its frame of reference 
 ##  (33.375, 52.84, 135.875) 
@@ -427,9 +424,6 @@ for row in data.to_dict(orient="records"):
         relDict["img_fn"] = row['Closest Image']
         relDict["point_cloud_fn"] = row['Closest Image'].replace('.png', '.pcd')
 
-        rel_df = pd.DataFrame([relDict])
-        data_rel= pd.concat([data_rel, rel_df], ignore_index=True)
-
     ## if box is in dataframe, process - same steps as the human
     if box_transformation is not None:
         box_rel_posMat = np.matmul(np.linalg.inv(lidar_transformation), box_transformation)
@@ -440,25 +434,16 @@ for row in data.to_dict(orient="records"):
         relDict["img_fn"] = row['Closest Image']
         relDict["point_cloud_fn"] = row['Closest Image'].replace('.png', '.pcd')
 
-        rel_df = pd.DataFrame([relDict])
-        data_rel= pd.concat([data_rel, rel_df], ignore_index=True)
+    relDict["L_Rot_Mat"] = np.linalg.inv(lidar_transformation[:3, :3])
 
+    rel_df = pd.DataFrame([relDict])
+    data_rel= pd.concat([data_rel, rel_df], ignore_index=True)
 
 ## buffer to store plotted objects 
 geometries = []
 # main loop
 pc_filenames = data_rel["point_cloud_fn"].unique()
-print("Number of pcd files:",len(pc_filenames))
-
-
-## optitrack to lidar rotation: 
-r_o2l = np.array(
-    [
-        [-1, 0, 0],
-        [ 0, 0, 1],
-        [ 0, 1, 0]
-    ]
-)
+print("Number of pcd files:",{len(pc_filenames)})
 
 # initialize the visualizer
 vis = o3d.visualization.Visualizer()
@@ -467,23 +452,24 @@ vis.create_window()
 ## new approach to iterate through all filenames 
 for idx, pc_filename in enumerate(pc_filenames):
 
+    ## optitrack to lidar rotation: 
+    r_o2l = np.array(
+        [
+            [-1, 0, 0],
+            [ 0, 0, 1],
+            [ 0, 1, 0]
+        ]
+    )
+
     # create the lidar point cloud
     lidar_file = os.path.join(lidar_folder, pc_filename)
     if not os.path.exists(lidar_file): 
         print("Could not find", idx, lidar_file)
         continue
-
-    # pause at frame (comment out to run continuously) 680
-    # if idx <= 70: #use this to run only specific frames (comment out this line and next line to run all)
-    #     continue
-    # else:
-    #     print(pc_filename)
-
-    if WRITE_FILE:
-        with open(imageSets_path / (imageSet + ".txt"), "a") as imageSet_file:
-            imageSet_file.write(pc_filename.split(".")[0] + "_" + set_name +"\n")
     
-
+    # pause at frame (comment out to run continuously) 680
+    if idx <= 150: #use this to run only specific frames (comment out this line and next line to run all)
+        continue
     if idx != 0:
     # remove all the geometry objects from the previous frame
         for item in geometries:
@@ -493,19 +479,23 @@ for idx, pc_filename in enumerate(pc_filenames):
     # pcd.points = o3d.utility.Vector3dVector([convert_orientation(point, 'FLU', 'RUB') for point in np.asarray(pcd.points)])
     pcd = o3d.io.read_point_cloud(lidar_file)
     pcd.paint_uniform_color([0, 0, 1]) ## blue
+    
     geometries.append(pcd)
     vis.add_geometry(pcd)
-
-    geometries = draw_centre(vis, geometries)    
 
     ## get the rows associated with this file:
     pc_rows = data_rel.loc[data_rel['point_cloud_fn'] == pc_filename]
 
-    # print(pc_rows)
+    L_Rot_Mat = pc_rows.iloc[0]["L_Rot_Mat"]
+
+    r_o2l = np.matmul(L_Rot_Mat, r_o2l)
+    pcd.rotate(L_Rot_Mat, center = (0,0,0))
+
+    geometries = draw_centre(vis, geometries, r_o2l)    
     
     ## lazy write
     if WRITE_FILE:
-        output_filepath = label_path / (pc_filename.replace('.pcd', "_{}.txt".format(set_name)))
+        output_filepath = label_path / (pc_filename.replace('.pcd', "{}.txt".format(set_name)))
         f = open(output_filepath, "w")
 
     for _, row in pc_rows.iterrows():
@@ -520,7 +510,7 @@ for idx, pc_filename in enumerate(pc_filenames):
         ## location of pivot point of object 
         object_origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.5, origin=(0,0,0))
         object_origin.rotate(object_rot, center=(0,0,0))
-        # object_origin.translate(object_loc)
+        object_origin.translate(object_loc)
         object_origin.rotate(r_o2l, center = (0,0,0)) ## rotate to match lidar coordinates 
 
         geometries.append(object_origin)
@@ -566,9 +556,6 @@ for idx, pc_filename in enumerate(pc_filenames):
         
         ## using 6D pose box fine its centre - this will determine it's location, remember is it in open3d coords
         bb_xyz = object_bb_6D.get_center().tolist()
-
-        ## update origin to this location 
-        object_origin.translate(bb_xyz)
         
         ## the boxes dims are calculate above 
         # bb_width(x), bb_height(y), bb_depth (z)
@@ -595,7 +582,7 @@ for idx, pc_filename in enumerate(pc_filenames):
         Zx, Zy, Zz = object_rot[2]
 
         object_rot_z = object_rot[2, :].squeeze()
-        z_axis = np.array([0,0,1])
+        z_axis = L_Rot_Mat[2, :].squeeze()
         object_yaw = np.arccos(np.clip(np.dot(object_rot_z,z_axis), -1.0, 1.0))
 
         # print(idx, Zx, Zy, np.rad2deg(object_yaw))
@@ -639,9 +626,9 @@ for idx, pc_filename in enumerate(pc_filenames):
         # ## calculate a box that will enclose object_bb_z_align but is horizontally aligned
         object_pc_bounds = object_bb_z_align.get_axis_aligned_bounding_box().get_box_points()
         if cls_no == 1:
-            dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1.1)
+            dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1)
         else:
-            dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1.1, ordering="DWH")
+            dims_dict = box_from_points(np.asarray(object_pc_bounds), scale=1, ordering="DWH")
         bb_width, bb_height, bb_depth = dims_dict["W"], dims_dict["H"], dims_dict["D"]
         
         # ## create repesentation of the final box for visualisation - NOTE THAT AT THIS POINT WE ARE USING OPEN3D CONVENTION 
@@ -657,41 +644,27 @@ for idx, pc_filename in enumerate(pc_filenames):
         # x-axis -> right (width), y-axis -> bottom (height), z-axis -> forward (depth)
         # x = x , y = -z, z = y, bb_depth = bb_height, bb_height = bb_depth
         # ## type, truncated, occluded, alpha, 2d_xyxy_bbox, 3d_dims, 3d_loc, 3d_yaw, score
-        # open3d_bb_x, open3d_bb_y, open3d_bb_z = bb_xyz  
-        # camera_bb_x, camera_bb_y, camera_bb_z = open3d_bb_x, -open3d_bb_z, open3d_bb_y
-        # bb_description = [0,0,0,0,0,0,0] + [bb_depth, bb_width, bb_height] + [camera_bb_x, camera_bb_y, camera_bb_z, object_yaw]
-
-        ## format: [x y z dx dy dz heading_angle category_name]
-        ## put in lidar coordinate system FLU from open3d RFU
-        # rotate 90 CCW around z axis 
-        # => lidar[x,y,z] = open3d[y, -1*x, z] 
         open3d_bb_x, open3d_bb_y, open3d_bb_z = bb_xyz  
-        lidar_bb_x, lidar_bb_y, lidar_bb_z = open3d_bb_x, open3d_bb_y, open3d_bb_z
-        # open3d : bb_width(x), bb_height(y), bb_depth (z)
-        lidar_bb_dx, lidar_bb_dy, lidar_bb_dz = bb_width, bb_height, bb_depth
+        camera_bb_x, camera_bb_y, camera_bb_z = open3d_bb_x, -open3d_bb_z, open3d_bb_y
+        bb_description = [0,0,0,0,0,0,0] + [bb_depth, bb_width, bb_height] + [camera_bb_x, camera_bb_y, camera_bb_z, object_yaw]
 
-        bb_description = [lidar_bb_x, lidar_bb_y, lidar_bb_z, lidar_bb_dx, lidar_bb_dy, lidar_bb_dz, np.pi - object_yaw]
-        # print("bb_description:\n", bb_description)
         if WRITE_FILE:
-            f.write((str(bb_description) + cls_name + "\n").replace("[", "").replace("]", " ").replace(",", " "))
+            f.write(cls_name + str(bb_description).replace("[", ",").replace("]", "\n"))
       
     
     if WRITE_FILE:
         f.close()
         ## Daniel Task 2: code to convert pcd to binary then save in correct directory 
-        # bin_data = convert_pcd_to_bin(pcd)
-        points = np.asarray(pcd.points).astype(np.float32)
-        bin_file_path = velodyne_path / pc_filename.replace('.pcd', "_{}.npy".format(set_name))
-        with open(bin_file_path, 'wb') as npyf:
-            np.save(npyf, points)
-        # save_bin_file(bin_data, bin_file_path)
+        bin_data = convert_pcd_to_bin(pcd)
+        bin_file_path = velodyne_path / pc_filename.replace('.pcd', "{}.bin".format(set_name))
+        save_bin_file(bin_data, bin_file_path)
 
     vis.poll_events()
     vis.update_renderer()
 
-    time.sleep(.025)
-    # break
-    # if idx >= 20:
+    time.sleep(.05)
+    break
+    # if idx >= 200:
     #     break 
 
 vis.run()
